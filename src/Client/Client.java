@@ -3,15 +3,13 @@ package Client;
 import Client.UIComponents.InputField;
 import Client.UIComponents.MessageArea;
 import Client.UIComponents.UsersArea;
+import Shared.ChatterPacket;
 
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
+import java.io.*;
 import java.net.Socket;
 import java.util.ArrayList;
 
@@ -26,8 +24,8 @@ public class Client extends JFrame {
     JScrollPane messageArea;
 
     Socket socket;
-    PrintWriter out;
-    BufferedReader in;
+    ObjectOutputStream out;
+    ObjectInputStream in;
 
     ArrayList<String> connectedUsers = new ArrayList<>();
 
@@ -48,9 +46,9 @@ public class Client extends JFrame {
             port = Integer.parseInt(split[1]);
 
             try{
-                socket = new Socket("127.0.0.1", port);
-                out = new PrintWriter(socket.getOutputStream(), true);
-                in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                socket = new Socket(ip, port);
+                out = new ObjectOutputStream(socket.getOutputStream());
+                in = new ObjectInputStream(socket.getInputStream());
                 validInput = true;
             }
             catch (IOException e) { JOptionPane.showMessageDialog(null, "Unable to connect."); }
@@ -66,7 +64,7 @@ public class Client extends JFrame {
         panel = new JPanel(new BorderLayout());
         usersArea = new UsersArea();
         messageArea = new MessageArea();
-        inputField = new InputField(name);
+        inputField = new InputField();
 
         setTitle("Chatter");
         add(panel);
@@ -81,52 +79,54 @@ public class Client extends JFrame {
 
         Thread.startVirtualThread(() -> {
             try {
-                String message;
-                while((message = in.readLine()) != null) {
-                    if (message.startsWith("UserJoined:")) {
-                        String name = message.split(":")[1];
-                        connectedUsers.add(name);
-                        updateUsers();
-                    } else if (message.startsWith("UserLeft:")) {
-                        String name = message.split(":")[1];
-                        connectedUsers.remove(name);
-                        updateUsers();
-                    } else if(message.startsWith("ConnectedUsers:")){
-                        message = message.substring("ConnectedUsers:".length());
-                        String[] users = message.split(",");
-                        for(String name : users){
-                            connectedUsers.add(name);
-                        }
-                        updateUsers();
-                    }
+                ChatterPacket packet;
+                while(( packet = (ChatterPacket) in.readObject()) != null) {
 
-                    else {
-                        final String msg = message;
-                        SwingUtilities.invokeLater(() -> ((JTextArea) messageArea.getViewport().getComponent(0))
-                                .append(msg + "\n"));
+                    switch(packet.getType()){
+                        case ChatterPacket.PacketType.UserJoined -> {
+                            connectedUsers.add(packet.getSender());
+                            updateUsers();
+                        }
+                        case ChatterPacket.PacketType.UserLeft -> {
+                            connectedUsers.remove(packet.getSender());
+                            updateUsers();
+                        }
+                        case ChatterPacket.PacketType.ConnectedUsers -> {
+                            for(String user : packet.getConnectedUsers()) {
+                                connectedUsers.add(user);
+                            }
+                            updateUsers();
+                        }
+                        case ChatterPacket.PacketType.TextMessage -> {
+                            final String msg = packet.getSender() + ": " + packet.getMsg();
+
+                            SwingUtilities.invokeLater(() -> ((JTextArea) messageArea.getViewport().getComponent(0))
+                                    .append(msg + "\n"));
+                        }
                     }
                 }
             } catch (IOException e) {
                 IO.println("Disconnected.");
+            } catch (ClassNotFoundException e) {
+                JOptionPane.showMessageDialog(null, "Error receiving packet.");
             }
         });
 
         inputField.addActionListener(e -> {
-            String text = inputField.getText();
-            out.println(name + ": " + text);
+            sendPacket(new ChatterPacket(name, ChatterPacket.PacketType.TextMessage, inputField.getText()));
             inputField.setText("");
         });
 
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                out.println("UserLeft:"+name);
+                sendPacket(new ChatterPacket(name, ChatterPacket.PacketType.UserLeft));
                 try { socket.close(); }
                 catch (IOException ex) { ex.printStackTrace(); }
             }
         });
 
-        out.println("UserJoined:"+name);
+        sendPacket(new ChatterPacket(name, ChatterPacket.PacketType.UserJoined));
     }
 
     private void updateUsers(){
@@ -136,6 +136,13 @@ public class Client extends JFrame {
                 usersArea.append(user+"\n");
             }
         });
+    }
+
+    private void sendPacket(ChatterPacket packet){
+        try {
+            out.writeObject(packet);
+            out.flush();
+        } catch (IOException e) { JOptionPane.showMessageDialog(null, "Error sending packet."); }
     }
 
     private void validateChatRoomInput(String chatRoom) throws InvalidInputIpException {

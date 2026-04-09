@@ -1,52 +1,54 @@
 package Server;
 
 import javax.swing.*;
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
+import java.io.*;
 import java.net.Socket;
 import java.net.SocketException;
 import java.util.ArrayList;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+import Shared.ChatterPacket;
 
 public class Server {
-    static ArrayList<ClientData> clients = new ArrayList<>();
+    static CopyOnWriteArrayList<ClientData> clients = new CopyOnWriteArrayList<>();
 
     public Server(Socket socket){
         Thread.startVirtualThread(() -> {
-            try (
-                 PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-                 BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            try (ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
+                 ObjectInputStream in = new ObjectInputStream(socket.getInputStream());
             ){
-                String message;
+                ChatterPacket packet;
                 try {
-                    while((message = in.readLine()) != null) {
-                        if(message.startsWith("UserJoined:")){
-                            String name = message.split(":")[1];
-                            if(!clients.isEmpty()){
-                                String connectedUsers = "";
-                                for(ClientData client : clients){
-                                    connectedUsers += client.name + ",";
+                    while((packet = (ChatterPacket) in.readObject()) != null) {
+                        switch(packet.getType()){
+                            case ChatterPacket.PacketType.UserJoined -> {
+                                if(!clients.isEmpty()){
+                                    ArrayList<String> connectedUsers = new ArrayList<>();
+                                    for(ClientData client : clients){
+                                        connectedUsers.add(client.name);
+                                    }
+                                    sendPacket(out, new ChatterPacket(packet.getSender(),
+                                            ChatterPacket.PacketType.ConnectedUsers, connectedUsers));
                                 }
-                                out.println("ConnectedUsers:"+connectedUsers);
+                                clients.add(new ClientData(packet.getSender(), out));
+                                broadcast(new ChatterPacket(packet.getSender(), ChatterPacket.PacketType.UserJoined));
                             }
-                            clients.add(new ClientData(name, out));
-                            broadcast("UserJoined:"+name);
-                        }
-                        else if(message.startsWith("UserLeft:")){
-                            String name = message.split(":")[1];
-                            for(int i = 0; i < clients.size(); i++){
-                                if(clients.get(i).name.equals(name)){
-                                    clients.remove(i);
-                                    break;
+                            case ChatterPacket.PacketType.UserLeft -> {
+                                for(int i = 0; i < clients.size(); i++){
+                                    if(clients.get(i).name.equals(packet.getSender())){
+                                        clients.remove(i);
+                                        break;
+                                    }
                                 }
+                                broadcast(new ChatterPacket(packet.getSender(), ChatterPacket.PacketType.UserLeft));
                             }
-                            broadcast("UserLeft:"+name);
-                        }else{
-                            broadcast(message);
+                            case ChatterPacket.PacketType.TextMessage -> broadcast(packet);
+                            default -> IO.println("Unknown packet type.");
                         }
                     }
-                } catch(IOException e){ e.printStackTrace(); }
+                }
+                catch(IOException e){ e.printStackTrace(); }
+                catch (ClassNotFoundException e) { IO.println("Error receiving packet."); }
             }
             catch(SocketException e){
                 e.printStackTrace();
@@ -55,19 +57,25 @@ public class Server {
         });
     }
 
-    synchronized void broadcast(String message){
+    void broadcast(ChatterPacket packet){
         for(ClientData client : clients){
-            client.out.println(message);
+            sendPacket(client.out, packet);
         }
     }
 
+    private void sendPacket(ObjectOutputStream out, ChatterPacket packet){
+        try {
+            out.writeObject(packet);
+            out.flush();
+        } catch (IOException e) { JOptionPane.showMessageDialog(null, "Error sending packet."); }
+    }
 }
 
 class ClientData {
     String name;
-    PrintWriter out;
+    ObjectOutputStream out;
 
-    public ClientData(String name, PrintWriter out) {
+    public ClientData(String name, ObjectOutputStream out) {
         this.out = out;
         this.name = name;
     }
