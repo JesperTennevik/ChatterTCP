@@ -12,6 +12,7 @@ import java.awt.event.WindowEvent;
 import java.io.*;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class Client extends JFrame {
     String ip;
@@ -27,7 +28,7 @@ public class Client extends JFrame {
     ObjectOutputStream out;
     ObjectInputStream in;
 
-    ArrayList<String> connectedUsers = new ArrayList<>();
+    CopyOnWriteArrayList<String> connectedUsers = new CopyOnWriteArrayList<>();
 
     public Client(){
         boolean validInput = false;
